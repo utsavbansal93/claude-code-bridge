@@ -1,0 +1,167 @@
+/**
+ * claude-code-bridge
+ *
+ * Exposes your Claude Code subscription as a local HTTP AI service.
+ * No separate Anthropic API key needed — uses CLAUDE_CODE_OAUTH_TOKEN,
+ * which Claude Code writes to .env automatically via a PreToolUse hook.
+ *
+ * Usage (embedded in your own server):
+ *
+ *   import { createBridge } from 'claude-code-bridge';
+ *   const { app, start } = createBridge({ port: 3099, model: 'claude-haiku-4-5' });
+ *   await start();
+ *
+ * Or use the standalone server:
+ *
+ *   npx claude-code-bridge          # runs on port 3099
+ *   PORT=4000 npx claude-code-bridge
+ *
+ * API:
+ *   POST /generate   { systemPrompt?, userPrompt, model?, maxTokens? }
+ *                    → { text, model, elapsed_ms }
+ *   GET  /health     → { ok, authReady, model, tokenPrefix }
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
+import express   from 'express';
+
+const DEFAULT_MODEL = 'claude-opus-4-5';
+const DEFAULT_PORT  = 3099;
+
+/**
+ * @param {{
+ *   port?:      number,   // default 3099 (or $PORT)
+ *   model?:     string,   // default 'claude-opus-4-5' (or $BRIDGE_MODEL)
+ *   corsOrigin?: RegExp,  // default /^http:\/\/localhost(:\d+)?$/
+ *   verbose?:   boolean,  // print startup banner, default true
+ * }} [options]
+ *
+ * @returns {{ app: import('express').Express, start: () => Promise<import('http').Server> }}
+ */
+export function createBridge(options = {}) {
+  const {
+    port       = parseInt(process.env.PORT       ?? DEFAULT_PORT),
+    model      = process.env.BRIDGE_MODEL        ?? DEFAULT_MODEL,
+    corsOrigin = /^http:\/\/localhost(:\d+)?$/,
+    verbose    = true,
+  } = options;
+
+  // ── Token access ─────────────────────────────────────────────────────────────
+  // Token rotates each Claude Code session; always read live from env.
+  function getToken() {
+    const t = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (!t) throw new Error(
+      'CLAUDE_CODE_OAUTH_TOKEN is not set.\n' +
+      'Make sure the Claude Code hook is writing it to .env — see README.'
+    );
+    return t;
+  }
+
+  // Re-create the Anthropic client whenever the token changes.
+  let _cachedClient = null;
+  let _cachedToken  = null;
+
+  function getClient() {
+    const token = getToken();
+    if (token !== _cachedToken) {
+      _cachedClient = new Anthropic({ apiKey: token });
+      _cachedToken  = token;
+    }
+    return _cachedClient;
+  }
+
+  // ── Express app ───────────────────────────────────────────────────────────────
+  const app = express();
+  app.use(express.json());
+
+  // CORS — localhost only by default
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && corsOrigin.test(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+
+  // ── POST /generate ────────────────────────────────────────────────────────────
+  /**
+   * Body: { systemPrompt?: string, userPrompt: string, model?: string, maxTokens?: number }
+   * Response: { text: string, model: string, elapsed_ms: number }
+   */
+  app.post('/generate', async (req, res) => {
+    const { systemPrompt, userPrompt, model: reqModel, maxTokens = 1024 } = req.body;
+
+    if (!userPrompt) {
+      return res.status(400).json({ error: '`userPrompt` is required' });
+    }
+
+    const useModel = reqModel ?? model;
+    const t0 = Date.now();
+
+    try {
+      const anthropic = getClient();
+      const msg = await anthropic.messages.create({
+        model:      useModel,
+        max_tokens: maxTokens,
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        messages: [{ role: 'user', content: userPrompt }],
+      });
+
+      const text = msg.content[0]?.text ?? '';
+      res.json({ text, model: useModel, elapsed_ms: Date.now() - t0 });
+
+    } catch (err) {
+      const status = err.status ?? 500;
+      if (verbose) console.error('[bridge] /generate error:', err.message);
+      res.status(status).json({
+        error:      err.message,
+        model:      useModel,
+        elapsed_ms: Date.now() - t0,
+      });
+    }
+  });
+
+  // ── GET /health ───────────────────────────────────────────────────────────────
+  app.get('/health', (_req, res) => {
+    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    res.json({
+      ok:          !!token,
+      authReady:   !!token,
+      model,
+      tokenPrefix: token ? `${token.slice(0, 16)}...` : null,
+    });
+  });
+
+  // ── start() ──────────────────────────────────────────────────────────────────
+  function start() {
+    return new Promise((resolve, reject) => {
+      const server = app.listen(port, (err) => {
+        if (err) return reject(err);
+
+        if (verbose) {
+          const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+          console.log('\n╔══════════════════════════════════════════════════╗');
+          console.log('║  claude-code-bridge                              ║');
+          console.log('╚══════════════════════════════════════════════════╝');
+          console.log(`\n  URL      : http://localhost:${port}`);
+          console.log(`  Auth     : ${token
+            ? `✓ token present (${token.slice(0, 16)}...)`
+            : '✗ CLAUDE_CODE_OAUTH_TOKEN missing — see README'}`);
+          console.log(`  Model    : ${model}`);
+          console.log('\n  Endpoints:');
+          console.log('    POST /generate   { systemPrompt?, userPrompt, model?, maxTokens? }');
+          console.log('    GET  /health     → { ok, authReady, model, tokenPrefix }\n');
+        }
+
+        resolve(server);
+      });
+
+      server.on('error', reject);
+    });
+  }
+
+  return { app, start };
+}

@@ -1,0 +1,26 @@
+{
+  "name": "claude-code-bridge",
+  "version": "1.0.0",
+  "description": "Use your Claude Code subscription as a local HTTP AI service — no separate API key needed.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "claude-code-bridge": "./server.js"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "keywords": [
+    "claude",
+    "anthropic",
+    "claude-code",
+    "llm",
+    "local-bridge",
+    "ai"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "express": "^4.19.2"
+  }
+}
