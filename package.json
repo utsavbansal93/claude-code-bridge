@@ -18,6 +18,9 @@
     "local-bridge",
     "ai"
   ],
+  "engines": {
+    "node": ">=20.6.0"
+  },
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

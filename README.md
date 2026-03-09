@@ -227,6 +227,36 @@ All options can be set via constructor or environment variable:
 
 ---
 
+## How does this compare to other AI proxy solutions?
+
+| Feature | claude-code-bridge | LiteLLM | Cloudflare AI Gateway | Kong AI Gateway | LocalAI | Ollama | vLLM | Portkey |
+|---|---|---|---|---|---|---|---|---|
+| **What it is** | OAuth token bridge | Open-source gateway | Managed edge service | Enterprise gateway | Local inference | Local inference | GPU serving engine | Enterprise LLMOps |
+| **Multi-provider** | No (Anthropic only) | Yes (100+) | Yes (7+) | Yes (10+) | N/A (local models) | N/A (local models) | N/A (local models) | Yes (200+) |
+| **Auth handling** | Claude Code OAuth token | Virtual keys | Cloudflare tokens | Kong auth plugins | None (local) | None (local) | None (local) | Centralized mgmt |
+| **Setup complexity** | Very low | Medium | Low | High | Low | Very low | Medium | High |
+| **Runs locally** | Yes | Yes | No (cloud) | No (cloud) | Yes | Yes | Yes | No (cloud) |
+| **Cost tracking** | No | Yes | Yes | No | N/A | N/A | N/A | Yes |
+| **Production ready** | No (dev only) | Yes | Yes | Yes | Limited | Limited | Yes | Yes |
+| **Rate limiting** | No | Yes | Yes (edge) | Yes | Via proxy | Via proxy | Via proxy | Yes |
+| **License** | MIT | Open source | Commercial | Open source | Open source | Open source | Open source | Commercial |
+
+### When to use what
+
+- **claude-code-bridge** — You already have a Claude Code subscription and want zero-config AI calls from your local scripts during development. No API key, no billing, no setup. Unique in that it piggybacks on an existing subscription's OAuth token.
+- **LiteLLM** — You need to call multiple AI providers (OpenAI, Anthropic, Gemini, etc.) through a single unified API. Best open-source option with cost tracking and load balancing.
+- **Cloudflare AI Gateway** — You want a managed, production-grade gateway with global edge caching and zero infrastructure to maintain.
+- **Kong AI Gateway** — Your organization already uses Kong for API management and wants to add AI routing to the existing stack.
+- **LocalAI / Ollama** — You want to run models entirely on your own hardware with no external API calls. Great for privacy and offline use, but limited to open-source model quality.
+- **vLLM** — You need high-performance GPU-accelerated inference for local models at scale.
+- **Portkey** — You're in a regulated industry (HIPAA, SOC 2) and need full compliance, observability, and cost analytics across 200+ LLMs.
+
+### Key differentiator
+
+Every other solution requires either its own API keys (with separate billing) or runs local models. claude-code-bridge is the only one that reuses your existing Claude Code subscription with no additional cost or credentials. The trade-off is that it only works during local development while Claude Code is running.
+
+---
+
 ## Notes for AI coding assistants
 
 If you are an AI assistant (Cursor, Copilot, Aider, etc.) helping a developer integrate this package:
