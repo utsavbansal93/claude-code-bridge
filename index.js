@@ -24,16 +24,24 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import express   from 'express';
+import { readFileSync } from 'node:fs';
+import { resolve }      from 'node:path';
 
-const DEFAULT_MODEL = 'claude-opus-4-5';
-const DEFAULT_PORT  = 3099;
+const DEFAULT_MODEL      = 'claude-opus-4-5';
+const DEFAULT_PORT       = 3099;
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TOKENS_LIMIT   = 8192;
+const RETRY_DELAY_MS     = 1000;
+const RETRYABLE_STATUSES = new Set([429, 529]);
 
 /**
  * @param {{
- *   port?:      number,   // default 3099 (or $PORT)
- *   model?:     string,   // default 'claude-opus-4-5' (or $BRIDGE_MODEL)
- *   corsOrigin?: RegExp,  // default /^http:\/\/localhost(:\d+)?$/
- *   verbose?:   boolean,  // print startup banner, default true
+ *   port?:       number,   // default 3099 (or $PORT)
+ *   model?:      string,   // default 'claude-opus-4-5' (or $BRIDGE_MODEL)
+ *   corsOrigin?: RegExp,   // default /^http:\/\/localhost(:\d+)?$/
+ *   verbose?:    boolean,  // print startup banner, default true
+ *   timeoutMs?:  number,   // API call timeout, default 120000
+ *   envPath?:    string,   // path to .env file, default '.env' (cwd-relative)
  * }} [options]
  *
  * @returns {{ app: import('express').Express, start: () => Promise<import('http').Server> }}
@@ -44,12 +52,25 @@ export function createBridge(options = {}) {
     model      = process.env.BRIDGE_MODEL        ?? DEFAULT_MODEL,
     corsOrigin = /^http:\/\/localhost(:\d+)?$/,
     verbose    = true,
+    timeoutMs  = DEFAULT_TIMEOUT_MS,
+    envPath    = resolve(process.cwd(), '.env'),
   } = options;
 
   // ── Token access ─────────────────────────────────────────────────────────────
-  // Token rotates each Claude Code session; always read live from env.
+  // Reads the .env file from disk on every call so token rotations are
+  // picked up without restarting the server.
+  function readTokenFromDisk() {
+    try {
+      const contents = readFileSync(envPath, 'utf8');
+      const match = contents.match(/^CLAUDE_CODE_OAUTH_TOKEN=(.+)$/m);
+      return match?.[1]?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
   function getToken() {
-    const t = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const t = readTokenFromDisk() || process.env.CLAUDE_CODE_OAUTH_TOKEN;
     if (!t) throw new Error(
       'CLAUDE_CODE_OAUTH_TOKEN is not set.\n' +
       'Make sure the Claude Code hook is writing it to .env — see README.'
@@ -92,32 +113,61 @@ export function createBridge(options = {}) {
    * Response: { text: string, model: string, elapsed_ms: number }
    */
   app.post('/generate', async (req, res) => {
-    const { systemPrompt, userPrompt, model: reqModel, maxTokens = 1024 } = req.body;
+    const { systemPrompt, userPrompt, model: reqModel, maxTokens: rawMaxTokens = 1024 } = req.body;
 
-    if (!userPrompt) {
-      return res.status(400).json({ error: '`userPrompt` is required' });
+    if (!userPrompt || typeof userPrompt !== 'string') {
+      return res.status(400).json({ error: '`userPrompt` is required and must be a string' });
     }
 
+    if (reqModel !== undefined && (typeof reqModel !== 'string' || reqModel.trim() === '')) {
+      return res.status(400).json({ error: '`model` must be a non-empty string' });
+    }
+
+    const maxTokens = Math.max(1, Math.min(MAX_TOKENS_LIMIT, Math.floor(Number(rawMaxTokens) || 1024)));
     const useModel = reqModel ?? model;
     const t0 = Date.now();
 
-    try {
+    async function attemptGenerate(signal) {
       const anthropic = getClient();
-      const msg = await anthropic.messages.create({
+      return anthropic.messages.create({
         model:      useModel,
         max_tokens: maxTokens,
         ...(systemPrompt ? { system: systemPrompt } : {}),
         messages: [{ role: 'user', content: userPrompt }],
-      });
+      }, { signal });
+    }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      let msg;
+      try {
+        msg = await attemptGenerate(controller.signal);
+      } catch (err) {
+        // Retry once for transient errors
+        if (RETRYABLE_STATUSES.has(err.status) && !controller.signal.aborted) {
+          if (verbose) console.log(`[bridge] ${err.status} — retrying in ${RETRY_DELAY_MS}ms...`);
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+          msg = await attemptGenerate(controller.signal);
+        } else {
+          throw err;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
 
       const text = msg.content[0]?.text ?? '';
       res.json({ text, model: useModel, elapsed_ms: Date.now() - t0 });
 
     } catch (err) {
-      const status = err.status ?? 500;
-      if (verbose) console.error('[bridge] /generate error:', err.message);
+      const status = err.name === 'AbortError' ? 504 : (err.status ?? 500);
+      const message = err.name === 'AbortError'
+        ? `Request timed out after ${timeoutMs}ms`
+        : err.message;
+      if (verbose) console.error('[bridge] /generate error:', message);
       res.status(status).json({
-        error:      err.message,
+        error:      message,
         model:      useModel,
         elapsed_ms: Date.now() - t0,
       });
@@ -126,7 +176,7 @@ export function createBridge(options = {}) {
 
   // ── GET /health ───────────────────────────────────────────────────────────────
   app.get('/health', (_req, res) => {
-    const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const token = readTokenFromDisk() || process.env.CLAUDE_CODE_OAUTH_TOKEN;
     res.json({
       ok:          !!token,
       authReady:   !!token,
@@ -135,14 +185,21 @@ export function createBridge(options = {}) {
     });
   });
 
+  // ── JSON parse error handler ────────────────────────────────────────────────
+  app.use((err, _req, res, _next) => {
+    if (err.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'Invalid JSON in request body' });
+    }
+    if (verbose) console.error('[bridge] Unhandled error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
   // ── start() ──────────────────────────────────────────────────────────────────
   function start() {
     return new Promise((resolve, reject) => {
-      const server = app.listen(port, (err) => {
-        if (err) return reject(err);
-
+      const server = app.listen(port, () => {
         if (verbose) {
-          const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+          const token = readTokenFromDisk() || process.env.CLAUDE_CODE_OAUTH_TOKEN;
           console.log('\n╔══════════════════════════════════════════════════╗');
           console.log('║  claude-code-bridge                              ║');
           console.log('╚══════════════════════════════════════════════════╝');
@@ -151,6 +208,7 @@ export function createBridge(options = {}) {
             ? `✓ token present (${token.slice(0, 16)}...)`
             : '✗ CLAUDE_CODE_OAUTH_TOKEN missing — see README'}`);
           console.log(`  Model    : ${model}`);
+          console.log(`  Timeout  : ${timeoutMs}ms`);
           console.log('\n  Endpoints:');
           console.log('    POST /generate   { systemPrompt?, userPrompt, model?, maxTokens? }');
           console.log('    GET  /health     → { ok, authReady, model, tokenPrefix }\n');
