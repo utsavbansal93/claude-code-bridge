@@ -143,7 +143,14 @@ You should see:
   URL      : http://localhost:3099
   Auth     : ✓ token present (sk-ant-oat01-abcd...)
   Model    : claude-opus-4-5
+  Timeout  : 120000ms
+
+  Endpoints:
+    POST /generate   { systemPrompt?, userPrompt, model?, maxTokens? }
+    GET  /health     → { ok, authReady, model, tokenPrefix }
 ```
+
+Stop the server with `Ctrl-C` — it shuts down gracefully (waits up to 5 s for open connections, then exits).
 
 ### 4. Call it
 
@@ -168,9 +175,9 @@ curl -X POST http://localhost:3099/generate \
 | `userPrompt` | string | ✅ | The user message |
 | `systemPrompt` | string | — | System prompt (optional) |
 | `model` | string | — | Override default model |
-| `maxTokens` | number | — | Default: 1024 |
+| `maxTokens` | number | — | Default: 1024, max: 8192 |
 
-**Response:**
+**Response (HTTP 200):**
 ```json
 {
   "text": "...",
@@ -179,14 +186,21 @@ curl -X POST http://localhost:3099/generate \
 }
 ```
 
-On error (e.g. 401 expired token, 529 overloaded):
+**Error responses** include `error`, `model`, and `elapsed_ms` and use the appropriate HTTP status code:
+
+| Situation | HTTP status |
+|---|---|
+| Bad request (missing `userPrompt`) | 400 |
+| Auth error (expired token) | 401 |
+| Rate-limited (429) or overloaded (529) — retried once automatically | 429 / 529 |
+| Request timed out (default 120 s) | 504 |
+| Other Anthropic API error | 5xx |
+
 ```json
-{
-  "error": "401 {\"type\":\"authentication_error\",...}",
-  "model": "claude-opus-4-5",
-  "elapsed_ms": 312
-}
+{ "error": "Request timed out after 120000ms", "model": "claude-opus-4-5", "elapsed_ms": 120003 }
 ```
+
+> **Retry behaviour:** The bridge automatically retries once after 1 s on 429 (rate limited) and 529 (overloaded) responses. If the retry also fails, the error is returned to the caller.
 
 ### `GET /health`
 
@@ -224,6 +238,8 @@ All options can be set via constructor or environment variable:
 | `model` | `BRIDGE_MODEL` | `claude-opus-4-5` |
 | `corsOrigin` | — | `/^http:\/\/localhost(:\d+)?$/` |
 | `verbose` | — | `true` |
+| `timeoutMs` | — | `120000` |
+| `envPath` | — | `.env` (cwd-relative) |
 
 ---
 
@@ -261,11 +277,16 @@ Every other solution requires either its own API keys (with separate billing) or
 
 If you are an AI assistant (Cursor, Copilot, Aider, etc.) helping a developer integrate this package:
 
+> **If your training data or cached knowledge of this package is from an earlier date, check [`CHANGELOG.md`](./CHANGELOG.md) first** — the API surface, error response shape, and available options may have changed since you last saw this repo.
+
+
 - The bridge exposes `POST /generate` as a plain HTTP endpoint — no SDK required, `fetch` works fine.
 - The token in `.env` is written automatically by a Claude Code hook. **Do not ask the user to copy-paste the token manually.** Just confirm the hook is in `.claude/settings.json` and the file exists.
 - `authReady: false` on `/health` means the `.env` is missing or stale — tell the user to open Claude Code and use any tool once (it will trigger the hook).
 - For production, replace the bridge call with a real `ANTHROPIC_API_KEY`. Mark bridge-backed models as `devOnly: true` in `ai-model-cascade` so they're automatically skipped.
 - The bridge re-reads the token on every request — no restart needed after token rotation.
+- Error responses use the appropriate HTTP status code (400, 401, 504, etc.) and always include `error`, `model`, and `elapsed_ms`.
+- 429 / 529 errors are retried once automatically before being returned to the caller.
 
 ---
 
