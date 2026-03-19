@@ -5,7 +5,7 @@
 ```
 POST http://localhost:3099/generate
 { "userPrompt": "Write a haiku about recursion." }
-→ { "text": "Function calls itself...", "model": "claude-3-haiku-20240307", "elapsed_ms": 743 }
+→ { "text": "Function calls itself...", "model": "claude-opus-4-5", "elapsed_ms": 743 }
 ```
 
 ---
@@ -59,12 +59,6 @@ Claude Code supports **hooks** — shell commands that run inside Claude Code's 
 Every time Claude Code uses any tool (read a file, run bash, etc.), this command runs inside Claude Code's process — where the token is live — and writes it to a `.env` file. The bridge server starts with `node --env-file-if-exists=.env server.js`, so it picks up the fresh token automatically.
 
 **The token rotates each Claude Code session.** The hook keeps the `.env` file current without any manual steps.
-
-### Model constraints with OAuth tokens
-
-OAuth tokens (`sk-ant-oat01-*`) are restricted by Anthropic to a subset of models. Testing shows that only **`claude-3-haiku-20240307`** reliably works — all Claude 4.x model IDs return a `400 invalid_request_error` or `404 not_found_error`.
-
-The bridge defaults to `claude-3-haiku-20240307` for this reason. If you need access to newer models (Claude Sonnet 4, Opus 4, etc.), use a real `ANTHROPIC_API_KEY` instead of the OAuth token — production use is better served by an API key anyway (see the table below).
 
 ---
 
@@ -148,7 +142,7 @@ You should see:
 
   URL      : http://localhost:3099
   Auth     : ✓ token present (sk-ant-oat01-abcd...)
-  Model    : claude-3-haiku-20240307
+  Model    : claude-opus-4-5
   Timeout  : 120000ms
 
   Endpoints:
@@ -167,7 +161,7 @@ curl -X POST http://localhost:3099/generate \
 ```
 
 ```json
-{ "text": "Hello! Hola! Bonjour!", "model": "claude-3-haiku-20240307", "elapsed_ms": 612 }
+{ "text": "Hello! Hola! Bonjour!", "model": "claude-opus-4-5", "elapsed_ms": 612 }
 ```
 
 ---
@@ -187,7 +181,7 @@ curl -X POST http://localhost:3099/generate \
 ```json
 {
   "text": "...",
-  "model": "claude-3-haiku-20240307",
+  "model": "claude-opus-4-5",
   "elapsed_ms": 743
 }
 ```
@@ -203,7 +197,7 @@ curl -X POST http://localhost:3099/generate \
 | Other Anthropic API error | 5xx |
 
 ```json
-{ "error": "Request timed out after 120000ms", "model": "claude-3-haiku-20240307", "elapsed_ms": 120003 }
+{ "error": "Request timed out after 120000ms", "model": "claude-opus-4-5", "elapsed_ms": 120003 }
 ```
 
 > **Retry behaviour:** The bridge automatically retries once after 1 s on 429 (rate limited) and 529 (overloaded) responses. If the retry also fails, the error is returned to the caller.
@@ -241,7 +235,7 @@ All options can be set via constructor or environment variable:
 | Option | Env var | Default |
 |---|---|---|
 | `port` | `PORT` | `3099` |
-| `model` | `BRIDGE_MODEL` | `claude-3-haiku-20240307` |
+| `model` | `BRIDGE_MODEL` | `claude-opus-4-5` |
 | `corsOrigin` | — | `/^http:\/\/localhost(:\d+)?$/` |
 | `verbose` | — | `true` |
 | `timeoutMs` | — | `120000` |
@@ -293,7 +287,6 @@ If you are an AI assistant (Cursor, Copilot, Aider, etc.) helping a developer in
 - The bridge re-reads the token on every request — no restart needed after token rotation.
 - Error responses use the appropriate HTTP status code (400, 401, 504, etc.) and always include `error`, `model`, and `elapsed_ms`.
 - 429 / 529 errors are retried once automatically before being returned to the caller.
-- **OAuth tokens only work with `claude-3-haiku-20240307`.** If you see a 400/404 on `/generate`, check the model — the bridge default is already set correctly, but callers overriding `model` in the request body may hit this. For newer models, the user needs a real `ANTHROPIC_API_KEY`.
 
 ---
 

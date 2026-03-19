@@ -3,13 +3,7 @@
 ## [1.0.2] — 2026-03-20
 
 ### Fixed
-- **Default model changed to `claude-3-haiku-20240307`** — OAuth tokens (`sk-ant-oat01-*`) are restricted by Anthropic to this model. The previous default (`claude-opus-4-5`) returned `400 invalid_request_error` on every `/generate` call, making the bridge silently broken out of the box.
-- **Better 400/404 error messages** — When an API call fails with 400 or 404 and an OAuth token is in use, the error message now explicitly explains that OAuth tokens only work with `claude-3-haiku-20240307` and suggests either setting `BRIDGE_MODEL` or switching to a real `ANTHROPIC_API_KEY`.
-
-### Docs
-- Added **OAuth model constraints** section to README explaining which models work with OAuth tokens vs API keys.
-- Updated all README examples and defaults to reflect `claude-3-haiku-20240307`.
-- Added note for AI coding assistants about the OAuth model limitation.
+- **OAuth tokens now sent as Bearer auth** — OAuth tokens (`sk-ant-oat01-*`) must be sent in the `Authorization: Bearer` header, not `X-Api-Key`. The bridge now detects OAuth tokens and creates the Anthropic client with `authToken` instead of `apiKey`. This restores access to all Claude 4.x models (Opus, Sonnet, Haiku) when using a Claude Code OAuth token.
 
 ## [1.0.1] — 2026-03-12
 

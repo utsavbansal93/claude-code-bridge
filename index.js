@@ -27,10 +27,7 @@ import express   from 'express';
 import { readFileSync } from 'node:fs';
 import { resolve }      from 'node:path';
 
-// OAuth tokens (sk-ant-oat01-*) are restricted to claude-3-haiku-20240307.
-// Claude 4.x model IDs return 400/404 with OAuth tokens — use a real
-// ANTHROPIC_API_KEY if you need newer models.
-const DEFAULT_MODEL      = 'claude-3-haiku-20240307';
+const DEFAULT_MODEL      = 'claude-opus-4-5';
 const DEFAULT_PORT       = 3099;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TOKENS_LIMIT   = 8192;
@@ -88,7 +85,13 @@ export function createBridge(options = {}) {
   function getClient() {
     const token = getToken();
     if (token !== _cachedToken) {
-      _cachedClient = new Anthropic({ apiKey: token });
+      // OAuth tokens (sk-ant-oat01-*) must be sent as Bearer tokens via the
+      // Authorization header. Passing them as apiKey (x-api-key) restricts
+      // access to older models and causes 400/404 on Claude 4.x+.
+      const isOAuth = token.startsWith('sk-ant-oat01-');
+      _cachedClient = isOAuth
+        ? new Anthropic({ authToken: token })
+        : new Anthropic({ apiKey: token });
       _cachedToken  = token;
     }
     return _cachedClient;
@@ -165,12 +168,9 @@ export function createBridge(options = {}) {
 
     } catch (err) {
       const status = err.name === 'AbortError' ? 504 : (err.status ?? 500);
-      let message = err.name === 'AbortError'
+      const message = err.name === 'AbortError'
         ? `Request timed out after ${timeoutMs}ms`
         : err.message;
-      if ((err.status === 400 || err.status === 404) && getToken().startsWith('sk-ant-oat01-')) {
-        message += ` — OAuth tokens only work with claude-3-haiku-20240307. Try BRIDGE_MODEL=claude-3-haiku-20240307 or use a real ANTHROPIC_API_KEY for newer models.`;
-      }
       if (verbose) console.error('[bridge] /generate error:', message);
       res.status(status).json({
         error:      message,
