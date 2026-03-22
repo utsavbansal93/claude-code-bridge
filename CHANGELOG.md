@@ -3,7 +3,7 @@
 ## [1.0.4] — 2026-03-22
 
 ### Fixed
-- **OAuth Bearer auth actually works now** — `new Anthropic({ authToken })` always threw "Could not resolve authentication method" due to a header key casing bug in the installed SDK version: `bearerAuth()` returns `'Authorization'` (capital A) but `validateHeaders()` checks `'authorization'` (lowercase), so they never matched. Fixed by setting the `Authorization` header directly via `defaultHeaders` and using `x-api-key: null` (the SDK's own escape hatch to skip auth header validation). This is the real fix for Claude 4.x model access with OAuth tokens.
+- **OAuth Bearer auth actually works now** — `new Anthropic({ authToken })` threw "Could not resolve authentication method" on SDK v0.39 due to a header key casing bug (`bearerAuth()` returned `'Authorization'` capital A, but `validateHeaders()` checked `'authorization'` lowercase). Upgraded `@anthropic-ai/sdk` from `^0.39.0` to `^0.80.0` where the auth validation was rearchitected to use case-insensitive header maps. `new Anthropic({ authToken: token, apiKey: null })` now works correctly for OAuth Bearer auth.
 
 ## [1.0.3] — 2026-03-22
 

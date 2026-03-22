@@ -85,26 +85,13 @@ export function createBridge(options = {}) {
   function getClient() {
     const token = getToken();
     if (token !== _cachedToken) {
+      // OAuth tokens (sk-ant-oat01-*) must be sent as Authorization: Bearer,
+      // not X-Api-Key. The SDK's authToken param handles this correctly
+      // since v0.80 (earlier versions had a header casing bug).
       const isOAuth = token.startsWith('sk-ant-oat01-');
-      if (isOAuth) {
-        // OAuth tokens must be sent as Authorization: Bearer, not X-Api-Key.
-        //
-        // We cannot use new Anthropic({ authToken }) because the installed SDK
-        // version has a header key casing bug: bearerAuth() returns the header
-        // as 'Authorization' (capital A) but validateHeaders() checks for
-        // 'authorization' (lowercase), so the validation always throws
-        // "Could not resolve authentication method" even with a valid token.
-        //
-        // Workaround: set the Authorization header directly via defaultHeaders,
-        // and pass x-api-key: null which is the SDK's own escape hatch to skip
-        // the auth header validation check entirely.
-        _cachedClient = new Anthropic({
-          apiKey:         null,
-          defaultHeaders: { 'Authorization': `Bearer ${token}`, 'x-api-key': null },
-        });
-      } else {
-        _cachedClient = new Anthropic({ apiKey: token });
-      }
+      _cachedClient = isOAuth
+        ? new Anthropic({ authToken: token, apiKey: null })
+        : new Anthropic({ apiKey: token });
       _cachedToken = token;
     }
     return _cachedClient;
