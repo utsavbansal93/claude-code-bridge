@@ -2,8 +2,14 @@
 
 ## [1.0.4] — 2026-03-22
 
-### Fixed
-- **OAuth Bearer auth actually works now** — `new Anthropic({ authToken })` threw "Could not resolve authentication method" on SDK v0.39 due to a header key casing bug (`bearerAuth()` returned `'Authorization'` capital A, but `validateHeaders()` checked `'authorization'` lowercase). Upgraded `@anthropic-ai/sdk` from `^0.39.0` to `^0.80.0` where the auth validation was rearchitected to use case-insensitive header maps. `new Anthropic({ authToken: token, apiKey: null })` now works correctly for OAuth Bearer auth.
+### Changed
+- **Default model changed to `claude-3-haiku-20240307`** — The Anthropic API explicitly rejects OAuth tokens (`sk-ant-oat01-*`) via Bearer auth ("OAuth authentication is currently not supported") and only allows them as `X-Api-Key` for older models. Claude 4.x models return 400/404 with OAuth tokens. The bridge now defaults to the only model confirmed to work with OAuth tokens. Use a real API key (`sk-ant-api03-*`) for Claude 4.x access.
+- **Reverted auth to X-Api-Key** — Bearer auth does not work with OAuth tokens on the public Anthropic API. All tokens are now sent via `X-Api-Key` regardless of format.
+- **Upgraded `@anthropic-ai/sdk`** from `^0.39.0` to `^0.80.0`.
+
+### Docs
+- Added **OAuth token model limitations** section explaining why only Haiku 3 works with OAuth tokens and how to use a real API key for Claude 4.x.
+- Updated all defaults and examples to reflect `claude-3-haiku-20240307`.
 
 ## [1.0.3] — 2026-03-22
 

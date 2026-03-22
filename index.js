@@ -27,7 +27,7 @@ import express   from 'express';
 import { readFileSync } from 'node:fs';
 import { resolve }      from 'node:path';
 
-const DEFAULT_MODEL      = 'claude-opus-4-5';
+const DEFAULT_MODEL      = 'claude-3-haiku-20240307';
 const DEFAULT_PORT       = 3099;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TOKENS_LIMIT   = 8192;
@@ -37,7 +37,7 @@ const RETRYABLE_STATUSES = new Set([429, 529]);
 /**
  * @param {{
  *   port?:       number,   // default 3099 (or $PORT)
- *   model?:      string,   // default 'claude-opus-4-5' (or $BRIDGE_MODEL)
+ *   model?:      string,   // default 'claude-3-haiku-20240307' (or $BRIDGE_MODEL)
  *   corsOrigin?: RegExp,   // default /^http:\/\/localhost(:\d+)?$/
  *   verbose?:    boolean,  // print startup banner, default true
  *   timeoutMs?:  number,   // API call timeout, default 120000
@@ -85,14 +85,13 @@ export function createBridge(options = {}) {
   function getClient() {
     const token = getToken();
     if (token !== _cachedToken) {
-      // OAuth tokens (sk-ant-oat01-*) must be sent as Authorization: Bearer,
-      // not X-Api-Key. The SDK's authToken param handles this correctly
-      // since v0.80 (earlier versions had a header casing bug).
-      const isOAuth = token.startsWith('sk-ant-oat01-');
-      _cachedClient = isOAuth
-        ? new Anthropic({ authToken: token, apiKey: null })
-        : new Anthropic({ apiKey: token });
-      _cachedToken = token;
+      // Always use apiKey (X-Api-Key header). OAuth tokens (sk-ant-oat01-*)
+      // work as X-Api-Key for older models (claude-3-haiku-20240307) but the
+      // Anthropic API explicitly rejects them via Authorization: Bearer
+      // ("OAuth authentication is currently not supported"). Claude 4.x
+      // models require a real API key (sk-ant-api03-*).
+      _cachedClient = new Anthropic({ apiKey: token });
+      _cachedToken  = token;
     }
     return _cachedClient;
   }

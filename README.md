@@ -5,7 +5,7 @@
 ```
 POST http://localhost:3099/generate
 { "userPrompt": "Write a haiku about recursion." }
-→ { "text": "Function calls itself...", "model": "claude-opus-4-5", "elapsed_ms": 743 }
+→ { "text": "Function calls itself...", "model": "claude-3-haiku-20240307", "elapsed_ms": 743 }
 ```
 
 ---
@@ -59,6 +59,14 @@ Claude Code supports **hooks** — shell commands that run inside Claude Code's 
 Every time Claude Code uses any tool (read a file, run bash, etc.), this command runs inside Claude Code's process — where the token is live — and writes it to a `.env` file. The bridge server starts with `node --env-file-if-exists=.env server.js`, so it picks up the fresh token automatically.
 
 **The token rotates each Claude Code session.** The hook keeps the `.env` file current without any manual steps.
+
+### OAuth token model limitations
+
+The Claude Code OAuth token (`sk-ant-oat01-*`) only works with **`claude-3-haiku-20240307`** via the public Anthropic API. Claude 4.x models (Opus, Sonnet, Haiku 4.5) return `400 invalid_request_error` or `404 not_found_error`. The API also explicitly rejects OAuth tokens sent as Bearer auth (`"OAuth authentication is currently not supported"`).
+
+Claude Code itself uses these tokens to access all models, but it does so through internal infrastructure that isn't available via the public SDK. The bridge defaults to `claude-3-haiku-20240307` for this reason.
+
+**If you need Claude 4.x models**, use a real Anthropic API key (`sk-ant-api03-*`) — the bridge works with standard API keys too, just set `ANTHROPIC_API_KEY` in your environment or `.env` file instead of `CLAUDE_CODE_OAUTH_TOKEN`. Or override: `BRIDGE_MODEL=claude-sonnet-4-5-20250514 npm start`.
 
 ---
 
@@ -142,7 +150,7 @@ You should see:
 
   URL      : http://localhost:3099
   Auth     : ✓ token present (sk-ant-oat01-abcd...)
-  Model    : claude-opus-4-5
+  Model    : claude-3-haiku-20240307
   Timeout  : 120000ms
 
   Endpoints:
@@ -161,7 +169,7 @@ curl -X POST http://localhost:3099/generate \
 ```
 
 ```json
-{ "text": "Hello! Hola! Bonjour!", "model": "claude-opus-4-5", "elapsed_ms": 612 }
+{ "text": "Hello! Hola! Bonjour!", "model": "claude-3-haiku-20240307", "elapsed_ms": 612 }
 ```
 
 ---
@@ -181,7 +189,7 @@ curl -X POST http://localhost:3099/generate \
 ```json
 {
   "text": "...",
-  "model": "claude-opus-4-5",
+  "model": "claude-3-haiku-20240307",
   "elapsed_ms": 743
 }
 ```
@@ -197,7 +205,7 @@ curl -X POST http://localhost:3099/generate \
 | Other Anthropic API error | 5xx |
 
 ```json
-{ "error": "Request timed out after 120000ms", "model": "claude-opus-4-5", "elapsed_ms": 120003 }
+{ "error": "Request timed out after 120000ms", "model": "claude-3-haiku-20240307", "elapsed_ms": 120003 }
 ```
 
 > **Retry behaviour:** The bridge automatically retries once after 1 s on 429 (rate limited) and 529 (overloaded) responses. If the retry also fails, the error is returned to the caller.
@@ -208,7 +216,7 @@ curl -X POST http://localhost:3099/generate \
 {
   "ok": true,
   "authReady": true,
-  "model": "claude-opus-4-5",
+  "model": "claude-3-haiku-20240307",
   "tokenPrefix": "sk-ant-oat01-abcd..."
 }
 ```
@@ -235,7 +243,7 @@ All options can be set via constructor or environment variable:
 | Option | Env var | Default |
 |---|---|---|
 | `port` | `PORT` | `3099` |
-| `model` | `BRIDGE_MODEL` | `claude-opus-4-5` |
+| `model` | `BRIDGE_MODEL` | `claude-3-haiku-20240307` |
 | `corsOrigin` | — | `/^http:\/\/localhost(:\d+)?$/` |
 | `verbose` | — | `true` |
 | `timeoutMs` | — | `120000` |
@@ -359,6 +367,10 @@ The success response shape is `{ text, model, elapsed_ms }`. The field is `text`
 ### What `authReady: true` does and does not mean
 
 `authReady: true` on `/health` only means a token string is present in `.env` or the environment. It does **not** mean the token is valid, unexpired, or that the configured model is accessible. The startup probe makes a real API call and is the authoritative check. If the probe line shows `✓`, the bridge is fully operational. If it shows `✗` or was skipped (no token at startup time), treat the bridge as degraded until the user confirms the token is fresh.
+
+### OAuth tokens vs API keys — model access
+
+OAuth tokens (`sk-ant-oat01-*`) from Claude Code only work with `claude-3-haiku-20240307` on the public API. If the user needs Claude 4.x models, they need a real API key (`sk-ant-api03-*`). Do not attempt to send OAuth tokens as Bearer auth — the Anthropic API explicitly rejects it. The bridge sends all tokens as `X-Api-Key` and defaults to haiku for this reason.
 
 ---
 
