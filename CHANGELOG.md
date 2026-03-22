@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.3] — 2026-03-22
+
+### Added
+- **Startup model probe** — after the server binds, `start()` makes a real `max_tokens: 1` test call and prints `Probe: ✓` or `Probe: ✗` with an actionable message (missing token, expired token, inaccessible model). This surfaces misconfiguration immediately rather than silently failing on the first real request.
+- **401 auto-retry** — on an auth failure mid-session (token rotated between calls), the bridge busts its client cache, re-reads the token from disk, and retries the request once automatically. Callers no longer need to handle token rotation themselves for short-lived rotations.
+
+### Docs
+- Added **"Minimising startup failures"** section to README: the recommended session startup sequence (hook → trigger → probe → verify) that avoids the most common failure modes.
+- Expanded **"Notes for AI coding assistants"** with concrete best practices: use `systemPrompt` separately (not concatenated into `userPrompt`), set split connect/read timeouts, handle the `text` field correctly, and understand what `authReady: true` does and does not mean.
+
 ## [1.0.2] — 2026-03-20
 
 ### Fixed

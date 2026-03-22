@@ -273,20 +273,92 @@ Every other solution requires either its own API keys (with separate billing) or
 
 ---
 
+## Minimising startup failures
+
+The bridge depends on a live Claude Code session. Following this sequence consistently avoids the most common failure modes:
+
+**1. Ensure the hook is in place**
+
+Check that `.claude/settings.json` in your project contains the `PreToolUse` hook shown in the Setup section above, with the correct absolute path to your project's `.env`. Without this, no token is ever written.
+
+**2. Trigger the hook before starting the bridge**
+
+The hook only fires when Claude Code uses a tool. On a fresh session the `.env` may be empty or stale. Before starting the bridge, do anything that causes a tool call — read a file, run a command, ask Claude to check git status. You will see the hook run in Claude Code's tool output.
+
+Verify the token landed: `cat .env` should show `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...`
+
+**3. Start the bridge and read the probe line**
+
+```
+npm start
+```
+
+The startup banner now includes a **Probe** line that makes a real test call:
+
+```
+  Probe    : ✓ model 'claude-opus-4-5' is responding
+```
+
+If the probe fails, the message tells you exactly why (missing token, expired token, inaccessible model) and what to do. A failed probe means calls will fail — fix it before relying on the bridge.
+
+**4. On machine sleep / Claude Code restart**
+
+The token rotates when Claude Code restarts. The bridge automatically re-reads the token from `.env` on every request and retries once if it gets a 401, so most rotations are handled transparently as long as the hook fires again in the new session. If the bridge starts returning consistent 401s, use any tool in Claude Code to refresh the token.
+
+---
+
 ## Notes for AI coding assistants
 
 If you are an AI assistant (Cursor, Copilot, Aider, etc.) helping a developer integrate this package:
 
-> **If your training data or cached knowledge of this package is from an earlier date, check [`CHANGELOG.md`](./CHANGELOG.md) first** — the API surface, error response shape, and available options may have changed since you last saw this repo.
+> **If your training data or cached knowledge of this package is from an earlier date, check [`CHANGELOG.md`](./CHANGELOG.md) first** — the auth mechanism, error behaviour, and probe output have all changed across patch releases.
 
+### Integration best practices
 
-- The bridge exposes `POST /generate` as a plain HTTP endpoint — no SDK required, `fetch` works fine.
-- The token in `.env` is written automatically by a Claude Code hook. **Do not ask the user to copy-paste the token manually.** Just confirm the hook is in `.claude/settings.json` and the file exists.
-- `authReady: false` on `/health` means the `.env` is missing or stale — tell the user to open Claude Code and use any tool once (it will trigger the hook).
-- For production, replace the bridge call with a real `ANTHROPIC_API_KEY`. Mark bridge-backed models as `devOnly: true` in `ai-model-cascade` so they're automatically skipped.
-- The bridge re-reads the token on every request — no restart needed after token rotation.
-- Error responses use the appropriate HTTP status code (400, 401, 504, etc.) and always include `error`, `model`, and `elapsed_ms`.
-- 429 / 529 errors are retried once automatically before being returned to the caller.
+**Use `systemPrompt` and `userPrompt` as separate fields — never concatenate them.**
+
+The bridge passes `systemPrompt` directly to the Anthropic API's `system` parameter. If you concatenate them into `userPrompt` (e.g. `"System: ...\n\nUser: ..."`), the model receives the system instruction as plain user text, compliance with formatting rules degrades significantly, and you will see inconsistent JSON / markdown-wrapped responses.
+
+```python
+# CORRECT
+requests.post(url, json={
+    "systemPrompt": "Return JSON only. No markdown.",
+    "userPrompt":   json.dumps(payload),
+    "model":        "claude-haiku-4-5-20251001",
+})
+
+# WRONG — degrades model instruction-following
+requests.post(url, json={
+    "userPrompt": f"System: Return JSON only.\n\nUser: {payload}",
+})
+```
+
+**Check `/health` on startup, not before every call.**
+
+`GET /health` returns `{ ok, authReady, model, tokenPrefix }`. Check it once when your application starts. `authReady: false` means the token is missing — tell the user to trigger the Claude Code hook. Do not poll `/health` per-request; it adds latency and the token is re-read from disk automatically on every `/generate` call anyway.
+
+**Set tight timeouts with a separate connect timeout.**
+
+The bridge is a local process. If it is not running, connections are refused immediately. If it is running but slow, Haiku should respond in 200–500ms. A 15-second timeout hides failures and delays your fallback chain by 15 seconds.
+
+```python
+# (connect_timeout, read_timeout) — fail fast on connection refused
+timeout=(0.5, 5)
+```
+
+**Handle the `text` field, not `response`.**
+
+The success response shape is `{ text, model, elapsed_ms }`. The field is `text`, not `response`, `result`, or `output`.
+
+**On 401, the bridge already retries once internally.** If a 401 still reaches your caller, the token is genuinely expired and the user needs to trigger the Claude Code hook again. Do not retry 401s from your side — wait for the user to refresh the token.
+
+**OAuth tokens only work when Claude Code is actively running.** Do not attempt to store, export, or reuse the token outside of a live Claude Code session. It is session-scoped and will rotate.
+
+**The probe line in startup output is diagnostic gold.** When debugging integration issues, ask the user to share their bridge startup output. `Probe: ✗` with a status code tells you exactly what is wrong before any request is made.
+
+### What `authReady: true` does and does not mean
+
+`authReady: true` on `/health` only means a token string is present in `.env` or the environment. It does **not** mean the token is valid, unexpired, or that the configured model is accessible. The startup probe makes a real API call and is the authoritative check. If the probe line shows `✓`, the bridge is fully operational. If it shows `✗` or was skipped (no token at startup time), treat the bridge as degraded until the user confirms the token is fresh.
 
 ---
 

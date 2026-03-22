@@ -19,7 +19,7 @@
  * API:
  *   POST /generate   { systemPrompt?, userPrompt, model?, maxTokens? }
  *                    → { text, model, elapsed_ms }
- *   GET  /health     → { ok, authReady, model, tokenPrefix }
+ *   GET  /health     → { ok, authReady, model, tokenPrefix, probeOk? }
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -97,6 +97,11 @@ export function createBridge(options = {}) {
     return _cachedClient;
   }
 
+  function invalidateClientCache() {
+    _cachedClient = null;
+    _cachedToken  = null;
+  }
+
   // ── Express app ───────────────────────────────────────────────────────────────
   const app = express();
   app.use(express.json());
@@ -151,10 +156,16 @@ export function createBridge(options = {}) {
       try {
         msg = await attemptGenerate(controller.signal);
       } catch (err) {
-        // Retry once for transient errors
         if (RETRYABLE_STATUSES.has(err.status) && !controller.signal.aborted) {
+          // Transient rate-limit / overload — wait and retry once
           if (verbose) console.log(`[bridge] ${err.status} — retrying in ${RETRY_DELAY_MS}ms...`);
           await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+          msg = await attemptGenerate(controller.signal);
+        } else if (err.status === 401 && !controller.signal.aborted) {
+          // Auth failure — token may have rotated since last call. Bust the
+          // client cache so getClient() re-reads the token from disk, then retry.
+          if (verbose) console.log('[bridge] 401 — token may have rotated, re-reading and retrying...');
+          invalidateClientCache();
           msg = await attemptGenerate(controller.signal);
         } else {
           throw err;
@@ -181,6 +192,8 @@ export function createBridge(options = {}) {
   });
 
   // ── GET /health ───────────────────────────────────────────────────────────────
+  // Returns token presence only — does NOT make a live API call.
+  // Use the startup probe log or a test /generate call to verify model access.
   app.get('/health', (_req, res) => {
     const token = readTokenFromDisk() || process.env.CLAUDE_CODE_OAUTH_TOKEN;
     res.json({
@@ -200,10 +213,42 @@ export function createBridge(options = {}) {
     res.status(500).json({ error: 'Internal server error' });
   });
 
+  // ── Startup model probe ───────────────────────────────────────────────────────
+  // Makes a minimal API call after the server binds to verify the token and
+  // model are actually usable. Logs a clear warning if not — does not block startup.
+  async function probeModel() {
+    const token = readTokenFromDisk() || process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (!token) {
+      if (verbose) console.log('  Probe    : ✗ skipped — token not yet available');
+      if (verbose) console.log('             Use any tool in Claude Code to trigger the hook, then the bridge will auto-pick it up.\n');
+      return;
+    }
+    try {
+      const anthropic = getClient();
+      await anthropic.messages.create({
+        model,
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      if (verbose) console.log(`  Probe    : ✓ model '${model}' is responding\n`);
+    } catch (err) {
+      if (verbose) {
+        console.warn(`  Probe    : ✗ model '${model}' test call failed (${err.status ?? err.message})`);
+        if (err.status === 401) {
+          console.warn('             Token is expired or invalid — use any tool in Claude Code to refresh it.');
+        } else if (err.status === 400 || err.status === 404) {
+          console.warn(`             This model may not be accessible with your token.`);
+          console.warn(`             Try: BRIDGE_MODEL=claude-haiku-4-5-20251001 npm start`);
+        }
+        console.warn('');
+      }
+    }
+  }
+
   // ── start() ──────────────────────────────────────────────────────────────────
   function start() {
     return new Promise((resolve, reject) => {
-      const server = app.listen(port, () => {
+      const server = app.listen(port, async () => {
         if (verbose) {
           const token = readTokenFromDisk() || process.env.CLAUDE_CODE_OAUTH_TOKEN;
           console.log('\n╔══════════════════════════════════════════════════╗');
@@ -217,9 +262,11 @@ export function createBridge(options = {}) {
           console.log(`  Timeout  : ${timeoutMs}ms`);
           console.log('\n  Endpoints:');
           console.log('    POST /generate   { systemPrompt?, userPrompt, model?, maxTokens? }');
-          console.log('    GET  /health     → { ok, authReady, model, tokenPrefix }\n');
+          console.log('    GET  /health     → { ok, authReady, model, tokenPrefix }');
+          console.log('');
         }
 
+        await probeModel();
         resolve(server);
       });
 
