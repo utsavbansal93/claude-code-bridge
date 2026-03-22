@@ -85,14 +85,27 @@ export function createBridge(options = {}) {
   function getClient() {
     const token = getToken();
     if (token !== _cachedToken) {
-      // OAuth tokens (sk-ant-oat01-*) must be sent as Bearer tokens via the
-      // Authorization header. Passing them as apiKey (x-api-key) restricts
-      // access to older models and causes 400/404 on Claude 4.x+.
       const isOAuth = token.startsWith('sk-ant-oat01-');
-      _cachedClient = isOAuth
-        ? new Anthropic({ authToken: token })
-        : new Anthropic({ apiKey: token });
-      _cachedToken  = token;
+      if (isOAuth) {
+        // OAuth tokens must be sent as Authorization: Bearer, not X-Api-Key.
+        //
+        // We cannot use new Anthropic({ authToken }) because the installed SDK
+        // version has a header key casing bug: bearerAuth() returns the header
+        // as 'Authorization' (capital A) but validateHeaders() checks for
+        // 'authorization' (lowercase), so the validation always throws
+        // "Could not resolve authentication method" even with a valid token.
+        //
+        // Workaround: set the Authorization header directly via defaultHeaders,
+        // and pass x-api-key: null which is the SDK's own escape hatch to skip
+        // the auth header validation check entirely.
+        _cachedClient = new Anthropic({
+          apiKey:         null,
+          defaultHeaders: { 'Authorization': `Bearer ${token}`, 'x-api-key': null },
+        });
+      } else {
+        _cachedClient = new Anthropic({ apiKey: token });
+      }
+      _cachedToken = token;
     }
     return _cachedClient;
   }

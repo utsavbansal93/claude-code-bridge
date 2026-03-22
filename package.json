@@ -1,6 +1,6 @@
 {
   "name": "claude-code-bridge",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Use your Claude Code subscription as a local HTTP AI service — no separate API key needed.",
   "type": "module",
   "main": "index.js",
